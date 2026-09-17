@@ -1,0 +1,6 @@
+# Runtime state: contains claimant addresses and hashed IPs. Never commit.
+faucet-data.json
+*.bak-*
+node_modules/
+# Wallet material never lives in this repo, but belt and braces.
+*.key

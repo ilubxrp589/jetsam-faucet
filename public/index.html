@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JTM Faucet</title>
+<style>
+  :root {
+    --bg: #060a0f;
+    --panel: #0d1219;
+    --panel2: #121924;
+    --line: #1c2733;
+    --text: #e8eef2;
+    --muted: #8fa9b5;
+    --accent: #3fe3c5;
+    --accent-dim: #227a6b;
+    --error: #ff6b6b;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px;
+  }
+  .wrap { width: 100%; max-width: 400px; }
+
+  .mark {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 8px;
+  }
+  .mark::before, .mark::after { content: ""; width: 22px; height: 1px; background: var(--accent-dim); }
+  h1 { font-size: 25px; margin: 0 0 7px; text-align: center; font-weight: 650; }
+  .sub { text-align: center; font-size: 12px; color: var(--muted); margin: 0 0 24px; }
+  .sub span { color: #46565f; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+
+  .track { height: 10px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); overflow: hidden; }
+  .fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .4s ease; }
+  .bar-note { font-size: 12.5px; color: var(--muted); text-align: center; margin-top: 9px; }
+  .bar-note b { color: var(--text); font-weight: 600; }
+  .countdown {
+    text-align: center; margin-top: 7px; font-family: Consolas, monospace;
+    font-size: 12.5px; color: var(--accent); letter-spacing: .05em;
+    font-variant-numeric: tabular-nums; min-height: 17px;
+  }
+  .countdown span { color: var(--muted); font-family: inherit; letter-spacing: 0; }
+  /* Idle = queue empty. The clock is shown so the 24h guarantee is visible
+     before anyone joins, but dimmed so it never implies a send is imminent. */
+  .countdown.idle { color: var(--muted); opacity: .75; }
+
+  input {
+    width: 100%; margin-top: 22px; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 9px; padding: 14px; color: var(--text); font-size: 15px;
+    font-family: Consolas, monospace; outline: none; text-align: center;
+  }
+  input::placeholder { color: #46565f; }
+  input:focus { border-color: var(--accent-dim); }
+  input.bad { border-color: var(--error); }
+
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  button {
+    flex: 1; border-radius: 9px; padding: 12px 8px; font-weight: 700; font-size: 14px;
+    cursor: pointer; border: 1px solid transparent; transition: opacity .15s, border-color .15s;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.25;
+  }
+  button small { font-weight: 600; font-size: 10.5px; opacity: .75; white-space: nowrap; }
+  /* Batch pays more, so it reads as the main action. */
+  button.primary { background: var(--accent); color: #04120f; }
+  button.secondary { background: transparent; border-color: var(--line); color: var(--muted); }
+  button:hover:not(:disabled) { opacity: .9; }
+  button.secondary:hover:not(:disabled) { border-color: var(--accent-dim); color: var(--text); }
+  button:disabled { background: #223038; border-color: transparent; color: #5c6b75; cursor: not-allowed; opacity: 1; }
+
+  .msg { margin-top: 14px; font-size: 13px; line-height: 1.5; text-align: center; min-height: 18px; }
+  .msg.ok { color: var(--accent); }
+  .msg.err { color: var(--error); }
+
+
+  /* ---- harbour background -------------------------------------------------
+     Blender renders for the vessels and port; the sky, sun and horizon haze
+     are generated gradients. Composited with CSS, so there is no renderer and
+     no render loop — the only motion is two drifting cloud layers. */
+  .scene { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  .scene-frame {
+    position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+    width: 100%; opacity: .42;
+  }
+  .lyr { position: absolute; background-repeat: no-repeat; background-size: 100% 100%; }
+  .lyr.s-sky { left: 0; top: 0; width: 100%; height: 100%; }
+  .fleet, .launch-wrap { position: absolute; inset: 0; }
+
+  /* Drift rather than travel: the sprites are cropped, so panning them far
+     would expose their edges. A slow sway reads as weather and never gaps. */
+  .drift-far  { animation: drift-a 190s ease-in-out infinite alternate; }
+  .drift-near { animation: drift-b 120s ease-in-out infinite alternate; }
+  @keyframes drift-a { from { transform: translateX(-1.6%); } to { transform: translateX(1.6%); } }
+  @keyframes drift-b { from { transform: translateX(2.4%); } to { transform: translateX(-2.4%); } }
+
+  .crate { opacity: 0; visibility: hidden; }
+  .crate.on { opacity: 1; visibility: visible; }
+  .crate.drop { animation: drop .55s cubic-bezier(.3,1.5,.5,1); }
+  @keyframes drop {
+    0%   { transform: translateY(-260%); opacity: 0; }
+    70%  { transform: translateY(0); opacity: 1; }
+    82%  { transform: translateY(-9%) scaleY(.92); }
+    100% { transform: translateY(0) scaleY(1); }
+  }
+
+  .fleet.sailing { animation: sail 5.5s ease-in forwards; }
+  @keyframes sail { to { transform: translateX(80%); opacity: 0; } }
+
+  .launch-full { opacity: 0; }
+  .launch-wrap.loaded .launch-full { opacity: 1; }
+  .launch-wrap.loaded .launch-empty { opacity: 0; }
+  .launch-wrap.departing { animation: launch-go 4s ease-in forwards; }
+  @keyframes launch-go { to { transform: translateX(130%); opacity: 0; } }
+
+  @media (max-width: 760px) { .scene-frame { opacity: .38; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .drift-far, .drift-near, .crate.drop,
+    .fleet.sailing, .launch-wrap.departing { animation: none; }
+    .fleet.sailing { opacity: 0; }
+  }
+
+  .wrap { position: relative; z-index: 1; }
+
+
+
+  /* Sprite geometry. Identical for every time of day — the crop boxes are the
+     union across all four, so the page swaps only a URL prefix, never a
+     position. Image URLs are set in JS from the visitor's local clock. */
+  .scene-frame { aspect-ratio: 1920 / 1080; }
+  .s-sky { left:0; top:0; width:100%; height:100%; }
+  .s-sun { left:0.0%; top:0.0%; width:100.0%; aspect-ratio:1920/1080; }
+  .s-cloud-far { left:0.0%; top:9.7222%; width:100.0%; aspect-ratio:1920/88; }
+  .s-cloud-near { left:24.5312%; top:1.9444%; width:75.4688%; aspect-ratio:1449/126; }
+  .s-port { left:0.0%; top:16.9444%; width:100.0%; aspect-ratio:1920/897; }
+  .s-haze { left:0.0%; top:0.0%; width:100.0%; aspect-ratio:1920/1080; }
+  .s-boat { left:33.0208%; top:59.3519%; width:35.4688%; aspect-ratio:681/301; }
+  .s-crate-01 { left:35.7812%; top:71.5741%; width:3.2292%; aspect-ratio:62/76; }
+  .s-crate-02 { left:38.75%; top:71.2963%; width:3.3333%; aspect-ratio:64/75; }
+  .s-crate-03 { left:41.7188%; top:70.9259%; width:3.3854%; aspect-ratio:65/75; }
+  .s-crate-04 { left:44.6354%; top:70.6481%; width:3.4375%; aspect-ratio:66/74; }
+  .s-crate-05 { left:47.5%; top:70.2778%; width:3.4896%; aspect-ratio:67/74; }
+  .s-crate-06 { left:50.3125%; top:70.0%; width:3.5937%; aspect-ratio:69/73; }
+  .s-crate-07 { left:53.125%; top:69.7222%; width:3.5937%; aspect-ratio:69/72; }
+  .s-crate-08 { left:55.8854%; top:69.3519%; width:3.6979%; aspect-ratio:71/72; }
+  .s-crate-09 { left:58.5938%; top:69.0741%; width:3.75%; aspect-ratio:72/71; }
+  .s-crate-10 { left:61.25%; top:68.7963%; width:3.8542%; aspect-ratio:74/70; }
+  .s-launch-empty { left:19.1667%; top:85.463%; width:14.8438%; aspect-ratio:285/157; }
+  .s-launch { left:19.1667%; top:85.463%; width:14.8438%; aspect-ratio:285/157; }
+
+  @media (max-width: 760px) {
+    .scene-frame { aspect-ratio: 1080 / 1440; }
+    .s-sky { left:0; top:0; width:100%; height:100%; }
+    .s-sun { left:0.0%; top:0.0%; width:100.0%; aspect-ratio:1080/1440; }
+    .s-cloud-far { left:0.0%; top:15.2778%; width:95.463%; aspect-ratio:1031/75; }
+    .s-cloud-near { left:18.5185%; top:9.5833%; width:73.7963%; aspect-ratio:797/112; }
+    .s-port { left:0.0%; top:19.9306%; width:100.0%; aspect-ratio:1080/1153; }
+    .s-haze { left:0.0%; top:0.0%; width:100.0%; aspect-ratio:1080/1440; }
+    .s-boat { left:8.4259%; top:47.2222%; width:73.1481%; aspect-ratio:790/338; }
+    .s-crate-01 { left:14.3519%; top:57.1528%; width:6.3889%; aspect-ratio:69/87; }
+    .s-crate-02 { left:20.7407%; top:56.9444%; width:6.0185%; aspect-ratio:65/86; }
+    .s-crate-03 { left:27.1296%; top:56.7361%; width:5.8333%; aspect-ratio:63/85; }
+    .s-crate-04 { left:33.0556%; top:56.5278%; width:6.1111%; aspect-ratio:66/85; }
+    .s-crate-05 { left:38.9815%; top:56.3194%; width:6.2963%; aspect-ratio:68/84; }
+    .s-crate-06 { left:44.8148%; top:56.1111%; width:6.4815%; aspect-ratio:70/84; }
+    .s-crate-07 { left:50.5556%; top:55.9028%; width:6.7593%; aspect-ratio:73/83; }
+    .s-crate-08 { left:56.2037%; top:55.7639%; width:6.9444%; aspect-ratio:75/82; }
+    .s-crate-09 { left:61.7593%; top:55.5556%; width:7.2222%; aspect-ratio:78/81; }
+    .s-crate-10 { left:67.2222%; top:55.3472%; width:7.5%; aspect-ratio:81/81; }
+    .s-launch-empty { left:2.5926%; top:71.25%; width:33.6111%; aspect-ratio:363/207; }
+    .s-launch { left:2.5926%; top:71.25%; width:33.6111%; aspect-ratio:363/207; }
+  }
+
+
+  .funds { text-align: center; font-size: 12px; color: #46565f; margin-top: 14px; min-height: 16px; }
+  .funds b { color: var(--muted); font-weight: 600; }
+
+  /* Secondary on purpose: ghost outline, not the solid accent, so it never
+     competes with Receive for the primary action. */
+  .share {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    margin: 12px auto 0; padding: 10px 16px; width: fit-content;
+    background: transparent; border: 1px solid var(--line); border-radius: 9px;
+    color: var(--muted); font-size: 13px; font-weight: 600; text-decoration: none;
+    cursor: pointer; transition: border-color .15s, color .15s;
+  }
+  .share:hover { border-color: var(--accent-dim); color: var(--text); }
+  .share svg { width: 13px; height: 13px; fill: currentColor; }
+</style>
+</head>
+<body>
+<div class="scene" aria-hidden="true">
+  <div class="scene-frame">
+    <div class="lyr s-sky"></div>
+    <div class="lyr s-sun"></div>
+    <div class="lyr drift-far s-cloud-far"></div>
+    <div class="lyr drift-near s-cloud-near"></div>
+    <div class="lyr s-port"></div>
+    <div class="lyr s-haze"></div>
+    <div class="fleet" id="fleet">
+      <div class="lyr s-boat"></div>
+      <div class="lyr crate s-crate-01" data-n="1"></div>
+      <div class="lyr crate s-crate-02" data-n="2"></div>
+      <div class="lyr crate s-crate-03" data-n="3"></div>
+      <div class="lyr crate s-crate-04" data-n="4"></div>
+      <div class="lyr crate s-crate-05" data-n="5"></div>
+      <div class="lyr crate s-crate-06" data-n="6"></div>
+      <div class="lyr crate s-crate-07" data-n="7"></div>
+      <div class="lyr crate s-crate-08" data-n="8"></div>
+      <div class="lyr crate s-crate-09" data-n="9"></div>
+      <div class="lyr crate s-crate-10" data-n="10"></div>
+    </div>
+    <div class="launch-wrap" id="launch-wrap">
+      <div class="lyr launch-empty s-launch-empty"></div>
+      <div class="lyr launch-full s-launch"></div>
+    </div>
+  </div>
+</div>
+<div class="wrap">
+  <div class="mark">Jetsam</div>
+  <h1>JTM Faucet</h1>
+  <div class="sub">Community made <span>· not an official Jetsam project</span></div>
+  <div class="card">
+    <div class="track"><div class="fill" id="fill"></div></div>
+    <div class="bar-note" id="bar-note">connecting…</div>
+    <div class="countdown" id="countdown"></div>
+
+    <input id="address" placeholder="j1q…" autocomplete="off" spellcheck="false">
+    <div class="actions">
+      <button class="primary" id="btn-batch" disabled><span class="lbl">Join batch</span><small id="amt-batch">—</small></button>
+      <button class="secondary" id="btn-single" disabled><span class="lbl">Receive now</span><small id="amt-single">—</small></button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+  <div class="funds" id="funds"></div>
+  <a class="share" id="share" target="_blank" rel="noopener noreferrer">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+    Share on X
+  </a>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // bech32m (BIP-173/350) with Jetsam's "j" prefix. Silent unless the
+  // address is actually wrong — a typo here sends JTM nowhere recoverable.
+  const CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+  const BECH32M_CONST = 0x2bc830a3;
+  const HRP = "j";
+  function polymod(values) {
+    const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+    let chk = 1;
+    for (const v of values) {
+      const top = chk >>> 25;
+      chk = ((chk & 0x1ffffff) << 5) ^ v;
+      for (let i = 0; i < 5; i++) if ((top >>> i) & 1) chk ^= GEN[i];
+    }
+    return chk >>> 0;
+  }
+  function hrpExpand(hrp) {
+    const r = [];
+    for (let i = 0; i < hrp.length; i++) r.push(hrp.charCodeAt(i) >> 5);
+    r.push(0);
+    for (let i = 0; i < hrp.length; i++) r.push(hrp.charCodeAt(i) & 31);
+    return r;
+  }
+  function valid(addr) {
+    if (!addr) return false;
+    if (addr !== addr.toLowerCase() && addr !== addr.toUpperCase()) return false;
+    const s = addr.toLowerCase();
+    const pos = s.lastIndexOf("1");
+    if (pos < 1 || pos + 7 > s.length) return false;
+    if (s.slice(0, pos) !== HRP) return false;
+    const data = [];
+    for (const ch of s.slice(pos + 1)) {
+      const v = CHARSET.indexOf(ch);
+      if (v === -1) return false;
+      data.push(v);
+    }
+    return polymod(hrpExpand(HRP).concat(data)) === BECH32M_CONST;
+  }
+
+  const addrEl = document.getElementById("address");
+  const btnBatch = document.getElementById("btn-batch");
+  const btnSingle = document.getElementById("btn-single");
+  const amtBatch = document.getElementById("amt-batch");
+  const amtSingle = document.getElementById("amt-single");
+  const msg = document.getElementById("msg");
+  const fill = document.getElementById("fill");
+  const barNote = document.getElementById("bar-note");
+  const fundsEl = document.getElementById("funds");
+  const cdEl = document.getElementById("countdown");
+  let flushAt = null;   // deadline from the server; ticked locally each second
+  let queueDepth = 0;   // how many are waiting; decides what the clock MEANS
+
+  // Built here rather than hardcoded so the wording stays readable and
+  // encoding is handled once. Deliberately plain: what it is and what you
+  // get, no claims about worth.
+  // /intent/tweet, NOT /intent/post: the X app registers the older path in
+  // its universal-link handler. Handing the app a path it has no route for
+  // makes it bounce back to the browser, which reloads and re-offers to open
+  // the app — the refresh loop.
+  //
+  // The link is folded into `text` rather than passed as a separate `url`
+  // param, so there is one parameter for the app and the web composer to
+  // agree on instead of two.
+  const shareEl = document.getElementById("share");
+  const SHARE_LINK = "https://jtmfaucet.halcyon-names.io";
+
+  // Built from live status so the amounts in the post can never drift from
+  // the amounts the faucet actually pays. Falls back to a version without
+  // numbers until the first poll answers.
+  function setShare(s) {
+    const known = s && s.amountSingleJtm != null && s.amountBatchJtm != null;
+    const terms = known
+      ? `${s.amountSingleJtm} JTM instantly, and ${s.amountBatchJtm} more if you ride a batch of ${s.batchSize}. `
+      : "";
+    // "a community faucet for @jetsamchain" rather than "the @jetsamchain
+    // faucet": it tags them without implying they run it, which matches the
+    // disclaimer on the page.
+    const text = `Free JTM from a community faucet for @jetsamchain — ${terms}One of each per wallet a day, no signup. ${SHARE_LINK}`;
+    shareEl.href = "https://x.com/intent/tweet?text=" + encodeURIComponent(text);
+  }
+  setShare(null);
+  let paused = false;
+  let busy = false;   // an instant claim sends inline and can take a moment
+
+  // Ticks locally between polls so the clock is smooth rather than jumping
+  // every 5 seconds. flushAt itself only ever comes from the server.
+  function hms(t) {
+    const hh = String(Math.floor(t / 3600)).padStart(2, "0");
+    const mm = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
+    const ss = String(t % 60).padStart(2, "0");
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function tick() {
+    if (!flushAt) { cdEl.textContent = ""; return; }   // server not reached yet
+    // The cycle runs continuously, queue or no queue. The tail text says which
+    // it is, so a ticking clock over an empty queue never reads as a promise
+    // that a payout is on its way.
+    const queued = queueDepth > 0;
+    // Harbour language, to match the art and launchDeparts(). Note the empty
+    // case is an INVITATION ("board before departure"), not a claim that a
+    // departure is coming -- with nobody aboard, nothing sails.
+    const tail = queued
+      ? "<span>until departure</span>"
+      : "<span>— board before departure</span>";
+    cdEl.classList.toggle("idle", !queued);
+    const ms = flushAt - Date.now();
+    if (ms <= 0) {
+      cdEl.innerHTML = queued ? "<span>casting off…</span>" : `00:00:00 ${tail}`;
+      return;
+    }
+    cdEl.innerHTML = `${hms(Math.floor(ms / 1000))} ${tail}`;
+  }
+  setInterval(tick, 1000);
+
+
+
+  // ---- time of day ---------------------------------------------------------
+  // Four renders of the same harbour. Which one you get depends on YOUR local
+  // clock, so someone opening this at dawn in Auckland sees dawn. Only the
+  // matching set is ever downloaded; the geometry is shared, so this swaps a
+  // URL prefix and nothing else.
+  const TOD_LAYERS = ["sky","sun","cloud_far","cloud_near","port","haze","boat",
+    "crate_01","crate_02","crate_03","crate_04","crate_05",
+    "crate_06","crate_07","crate_08","crate_09","crate_10",
+    "launch_empty","launch"];
+
+  function timeOfDay(d) {
+    const h = (d || new Date()).getHours();
+    if (h >= 5 && h < 8) return "dawn";
+    if (h >= 8 && h < 17) return "day";
+    if (h >= 17 && h < 20) return "dusk";
+    return "night";
+  }
+
+  const narrow = window.matchMedia("(max-width: 760px)");
+  let paintedAs = "";
+
+  function paintScene() {
+    const tod = timeOfDay();
+    const aspect = narrow.matches ? "tall" : "wide";
+    const key = tod + "/" + aspect;
+    if (key === paintedAs) return;          // nothing to do, and no refetch
+    paintedAs = key;
+    const dir = "art/" + key;
+    for (const n of TOD_LAYERS) {
+      const el = document.querySelector(".s-" + n.replace(/_/g, "-"));
+      if (!el) continue;
+      el.style.backgroundImage = "url('" + dir + "/" + n + ".webp')";
+      // overwritten where supported, so retina gets the 2x file
+      el.style.backgroundImage =
+        "image-set(url('" + dir + "/" + n + ".webp') 1x, url('" + dir + "/2x/" + n + ".webp') 2x)";
+    }
+    document.documentElement.dataset.tod = tod;
+  }
+
+  paintScene();
+  narrow.addEventListener("change", paintScene);
+  // A page left open across dusk should catch up rather than sit in daylight.
+  setInterval(paintScene, 10 * 60 * 1000);
+
+  // ---- harbour: crates track the real queue --------------------------------
+  const fleetEl = document.getElementById("fleet");
+  const launchWrap = document.getElementById("launch-wrap");
+  const crateEls = [...document.querySelectorAll(".crate")];
+  let shownCrates = null;     // null until the first poll, so nothing animates on load
+  let lastBatchId = null;
+
+  function renderHarbour(s) {
+    const n = Math.min(crateEls.length, s.queueDepth || 0);
+
+    // A batch just fired: sail, then reset to an empty deck for the next one.
+    const topBatch = s.recentBatches && s.recentBatches[0] ? s.recentBatches[0].batchId : null;
+    if (lastBatchId !== null && topBatch !== null && topBatch !== lastBatchId) {
+      fleetEl.classList.add("sailing");
+      setTimeout(() => {
+        fleetEl.classList.remove("sailing");
+        crateEls.forEach((c) => c.classList.remove("on", "drop"));
+        shownCrates = 0;
+      }, 5600);
+      lastBatchId = topBatch;
+      return;
+    }
+    lastBatchId = topBatch;
+    if (fleetEl.classList.contains("sailing")) return;
+
+    crateEls.forEach((c, i) => {
+      const want = i < n;
+      const had = c.classList.contains("on");
+      c.classList.toggle("on", want);
+      // Animate only crates that appeared since the last poll.
+      if (want && !had && shownCrates !== null) {
+        c.classList.remove("drop");
+        void c.offsetWidth;            // restart the animation
+        c.classList.add("drop");
+      }
+    });
+    shownCrates = n;
+  }
+
+  // An instant claim: the launch takes its crate and goes.
+  function launchDeparts() {
+    launchWrap.classList.add("loaded");
+    setTimeout(() => launchWrap.classList.add("departing"), 700);
+    setTimeout(() => {
+      launchWrap.classList.remove("departing", "loaded");
+    }, 5200);
+  }
+
+  function setMsg(kind, text) { msg.className = "msg " + kind; msg.textContent = text; }
+
+  function sync() {
+    const raw = addrEl.value.trim();
+    const ok = valid(raw);
+    addrEl.classList.toggle("bad", raw.length > 0 && !ok);
+    btnBatch.disabled = !ok || paused || busy;
+    btnSingle.disabled = !ok || paused || busy;
+  }
+
+  function render(s) {
+    paused = s.paused;
+    const pct = Math.min(100, Math.round((s.queueDepth / s.batchSize) * 100));
+    fill.style.width = pct + "%";
+    barNote.innerHTML = s.paused
+      ? s.pausedReason
+      : `<b>${s.queueDepth}</b> of <b>${s.batchSize}</b> — ${s.batchSize - s.queueDepth} more until the next batch goes out`;
+
+    flushAt = s.flushAt || null;
+    queueDepth = s.queueDepth || 0;
+    tick();
+
+    // Remaining float. null means the node was unreachable, which is not the
+    // same as empty, so say nothing rather than imply the faucet is drained.
+    // Amount plus what the float can still cover, per mode. Both are derived
+    // from the live balance, so any payout moves both numbers on the next
+    // render — the claim response and the 5s poll each trigger one.
+    const left = (n) => (n == null ? "" : " · " + n.toLocaleString() + " left");
+    if (s.amountBatchJtm != null) amtBatch.textContent = s.amountBatchJtm + " JTM" + left(s.claimsLeftBatch);
+    if (s.amountSingleJtm != null) amtSingle.textContent = s.amountSingleJtm + " JTM" + left(s.claimsLeftSingle);
+
+    renderHarbour(s);
+    setShare(s);
+
+    fundsEl.innerHTML = s.floatJtm == null
+      ? ""
+      : `wallet holds <b>${s.floatJtm.toLocaleString(undefined, { maximumFractionDigits: 2 })} JTM</b>`;
+    sync();
+  }
+
+  addrEl.addEventListener("input", () => { setMsg("", ""); sync(); });
+
+  async function claim(mode) {
+    const address = addrEl.value.trim();
+    if (!valid(address)) return;
+    const pressed = mode === "single" ? btnSingle : btnBatch;
+    // Only the label span is touched. Writing textContent on the button
+    // itself would delete the <small> holding the amount and remaining
+    // count, leaving render() updating a node no longer in the document.
+    const lbl = pressed.querySelector(".lbl");
+    const original = lbl.textContent;
+    busy = true;
+    lbl.textContent = "Sending…";
+    sync();
+    setMsg("", "");
+    try {
+      const res = await fetch("/api/claim", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address, mode }),
+      });
+      const body = await res.json();
+      if (res.ok && body.ok) {
+        addrEl.value = "";
+        setMsg("ok", body.mode === "single"
+          ? (launchDeparts(), `Sent ${body.amountJtm} JTM. Transaction ${body.txid.slice(0, 12)}…`)
+          : `Accepted. You're ${body.position} of ${body.batchSize} — your ${body.amountBatchJtm} JTM goes out when this batch fills up, or within ${body.batchMaxAgeHours}h at the latest.`);
+        render(body);
+      } else {
+        setMsg("err", body.error || "request failed");
+      }
+    } catch (e) {
+      setMsg("err", "faucet unreachable, try again shortly");
+    } finally {
+      // The old code restored this only on failure and returned early on
+      // success, which is why a successful batch claim sat on "Sending…".
+      lbl.textContent = original;
+      busy = false;
+      sync();
+    }
+  }
+
+  btnBatch.addEventListener("click", () => claim("batch"));
+  btnSingle.addEventListener("click", () => claim("single"));
+
+  async function poll() {
+    try {
+      const res = await fetch("/api/status");
+      if (res.ok) render(await res.json());
+      else barNote.textContent = "faucet offline";
+    } catch (e) {
+      barNote.textContent = "faucet offline";
+    }
+  }
+  poll();
+  setInterval(poll, 5000);
+})();
+</script>
+</body>
+</html>

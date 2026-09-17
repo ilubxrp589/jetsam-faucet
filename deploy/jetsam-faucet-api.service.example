@@ -1,0 +1,46 @@
+# Example unit. Copy to /etc/systemd/system/jetsam-faucet-api.service and edit.
+# Every tunable is an Environment line, so changing the unit changes the UI --
+# the page reads amounts, schedule and counters from /api/status.
+[Unit]
+Description=Jetsam faucet API (batched payouts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=CHANGEME
+WorkingDirectory=/home/CHANGEME/jetsam-faucet
+
+# The faucet's OWN node. Keep the wallet RPC on loopback -- it is an
+# internet-triggered hot wallet and must never be reachable from outside.
+Environment=FAUCET_RPC=http://127.0.0.1:9711
+Environment=FAUCET_BIND=127.0.0.1
+Environment=FAUCET_PORT=3790
+Environment=FAUCET_ALLOWED_ORIGIN=https://your.faucet.domain
+
+# Payouts. The instant lane pays less because it costs a whole block of
+# wallet lock for one recipient; the batch lane amortises that over N.
+Environment=FAUCET_AMOUNT_SINGLE_JTM=0.01
+Environment=FAUCET_AMOUNT_BATCH_JTM=0.03
+Environment=FAUCET_BATCH_SIZE=10
+
+# Departure schedule. A batch sails every BATCH_MAX_AGE_HOURS carrying whoever
+# is aboard (nothing sails if the queue is empty). MIN_GAP stops a batch that
+# fills early from departing ahead of schedule and monopolising the wallet.
+Environment=FAUCET_BATCH_MAX_AGE_HOURS=6
+Environment=FAUCET_BATCH_MIN_GAP_MINUTES=360
+
+# One claim per mode, per wallet AND per network, per window.
+Environment=FAUCET_COOLDOWN_HOURS=24
+
+# Auto-pause before the float cannot cover a batch. The relay fee is charged
+# per send on top of the payout, so budget for it (see README).
+Environment=FAUCET_MIN_FLOAT_JTM=2
+Environment=FAUCET_FEE_ALLOWANCE_MICRO=10000
+Environment=FAUCET_DATA_FILE=/home/CHANGEME/jetsam-faucet/faucet-data.json
+
+ExecStart=/usr/bin/node /home/CHANGEME/jetsam-faucet/server.mjs
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
