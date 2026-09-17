@@ -57,10 +57,44 @@ Most of these are not in any document, and each one presents as something else.
    a batch of N takes N blocks. This is the real throughput ceiling, not the float.
 3. **Transactions cap at 2 outputs.** There is no multi-recipient transaction, so
    a batch of 10 is 10 separate sends, each paying its own fee.
-4. **The relay fee is flat and charged on top.** Measured 0.009 JTM per
-   1-in/2-out send. That is ~30% of a 0.03 payout and ~90% of a 0.01 one. The
-   pre-flight check must reserve a fee *per send*, or the faucet accepts a full
-   batch it can only partly pay — silently burning claimers' cooldowns.
+4. **The fee is a formula, not a market — and a payout is charged for state
+   growth.** There is no fee bidding. From
+   `jetsam_chain/src/consensus/{params,fees}.rs`:
+
+   ```
+   required = MIN_FEE_BASE                       (5,000 uJTM)
+            + FEE_PER_INPUT   x inputs           (  100 each)
+            + FEE_PER_OUTPUT  x outputs          (  700 each)
+            + state_growth    x (outputs - inputs)
+
+   state_growth = STATE_GROWTH_FEE_BASE (2,500) x pressure_multiplier
+   pressure_multiplier: 1, then x2 / x4 / x8 at 50% / 75% / 90% slot occupancy
+   ```
+
+   Only `state_growth` is **burned**; the rest is claimable by the miner.
+
+   A faucet payout is 1 input and 2 outputs (recipient + change), so it is
+   **net +1 slot** and costs `5,000 + 100 + 1,400 + 2,500 = 9,000 uJTM`. That
+   is ~30% of a 0.03 payout and ~90% of a 0.01 one — the single biggest cost
+   in running a faucet.
+
+   You will see cheaper transactions on chain (6,600 is common). Those are
+   **net-zero-slot** — e.g. 2-in/2-out consolidations and transfers, which pay
+   no state-growth component at all. That saving is not available to a faucet:
+   handing someone a new UTXO *is* state growth, and the protocol prices it
+   deliberately. Restructuring does not help either — a 1-in/1-out send with no
+   change costs 5,800, but creating each exact-denomination UTXO to enable it
+   is itself net +1 slot at 9,000. The arithmetic is negative in both
+   directions.
+
+   **So pass `fee = 0` (automatic).** The node computes the required fee plus
+   the live mempool floor. Hardcoding a lower number risks a transaction that
+   never relays, which costs a claimer their cooldown for nothing.
+
+   The pre-flight check must reserve a fee *per send*, or the faucet accepts a
+   full batch it can only partly pay. Reserve above the current figure: the
+   pressure multiplier is stepwise, so the fee jumps to 11,500 the moment slot
+   occupancy crosses 50%.
 5. **`balance_micro_jtm` is confirmed-only.** It does not reflect a pending
    outbound send, so right after paying someone the node still reports the old
    figure until the change confirms. A UI that polls it will show the balance
