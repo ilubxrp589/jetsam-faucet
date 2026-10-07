@@ -138,4 +138,5 @@ No framework, no build, no database. One file each side.
 
 ## License
 
-Apache-2.0, matching Jetsam itself.
+Apache-2.0, matching Jetsam itself. Any redistribution or derived work must carry [NOTICE](NOTICE),
+which credits James Turner with a link to this repository.
